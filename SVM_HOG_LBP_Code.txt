@@ -1,0 +1,97 @@
+import numpy as np
+from PIL import Image
+from pathlib import Path
+from skimage.feature import hog, local_binary_pattern
+
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import GridSearchCV, StratifiedKFold
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+from sklearn.metrics import classification_report, accuracy_score
+
+def load_hog_lbp_dataset(dataset_dict, base_dir, target_size=(128, 128)):
+    X = []
+    y = []
+
+    radius = 3
+    n_points = 8 * radius
+    n_bins = n_points + 2  # bei uniform-LBP feste Anzahl
+
+    for image_name, label in dataset_dict.items():
+        image_path = base_dir / image_name
+        try:
+            with Image.open(image_path) as img:
+                img_gray = img.convert('L').resize(target_size)
+                img_array = np.array(img_gray)
+
+                hog_features = hog(
+                    img_array,
+                    orientations=9,
+                    pixels_per_cell=(8, 8),
+                    cells_per_block=(2, 2),
+                    block_norm='L2-Hys',
+                    transform_sqrt=True,
+                    visualize=False
+                )
+
+                lbp = local_binary_pattern(
+                    img_array,
+                    P=n_points,
+                    R=radius,
+                    method='uniform'
+                )
+                lbp_hist, _ = np.histogram(
+                    lbp.ravel(),
+                    bins=n_bins,
+                    range=(0, n_bins),
+                    density=True
+                )
+
+                combined_features = np.hstack([hog_features, lbp_hist])
+                X.append(combined_features)
+                y.append(label)
+
+        except Exception as e:
+            print(f"Fehler beim Laden von {image_name}: {e}")
+
+    return np.array(X), np.array(y)
+
+target_folder = Path(r"C:\Users\domin\Desktop\al5083_subset_balanced_2400")
+
+print("Extrahiere HOG + LBP Features für Trainingsdaten...")
+X_train_features, y_train = load_hog_lbp_dataset(subset[0], target_folder / "train")
+
+print("Extrahiere HOG + LBP Features für Testdaten...")
+X_test_features, y_test = load_hog_lbp_dataset(test_subset[0], target_folder / "test")
+
+pipeline = Pipeline([
+    ("scaler", StandardScaler()),
+    ("svm", SVC(kernel="rbf"))
+])
+
+param_grid = {
+    "svm__C": [0.1, 1, 5, 10, 20, 50],
+    "svm__gamma": ["scale", 0.001, 0.01, 0.1, 1]
+}
+
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+grid = GridSearchCV(
+    pipeline,
+    param_grid=param_grid,
+    cv=cv,
+    scoring="f1_macro",
+    n_jobs=-1
+)
+
+print("Starte Hyperparameter-Suche...")
+grid.fit(X_train_features, y_train)
+
+print("Beste Parameter:", grid.best_params_)
+print("Bester CV-Score:", grid.best_score_)
+
+y_pred = grid.predict(X_test_features)
+
+accuracy = accuracy_score(y_test, y_pred)
+print(f"\nGenauigkeit: {accuracy:.2%}\n")
+print(classification_report(y_test, y_pred, target_names=lab_meaning))
